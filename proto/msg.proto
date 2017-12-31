@@ -1,0 +1,12 @@
+message Member {
+    required uint32 ip = 1;
+    required uint32 port = 2;
+    required double suspicion = 3;
+    required uint64 heartbeat = 4;
+}
+
+message Gossip {
+    required uint32 from_ip = 1;
+    required uint32 from_port = 2;
+    repeated Member members = 3;
+}
