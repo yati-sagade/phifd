@@ -350,8 +350,7 @@ impl ::protobuf::reflect::ProtobufValue for Member {
 #[derive(PartialEq,Clone,Default)]
 pub struct Gossip {
     // message fields
-    from_ip: ::std::option::Option<u32>,
-    from_port: ::std::option::Option<u32>,
+    heartbeat: ::std::option::Option<u64>,
     members: ::protobuf::RepeatedField<Member>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
@@ -376,61 +375,34 @@ impl Gossip {
         }
     }
 
-    // required uint32 from_ip = 1;
+    // required uint64 heartbeat = 1;
 
-    pub fn clear_from_ip(&mut self) {
-        self.from_ip = ::std::option::Option::None;
+    pub fn clear_heartbeat(&mut self) {
+        self.heartbeat = ::std::option::Option::None;
     }
 
-    pub fn has_from_ip(&self) -> bool {
-        self.from_ip.is_some()
-    }
-
-    // Param is passed by value, moved
-    pub fn set_from_ip(&mut self, v: u32) {
-        self.from_ip = ::std::option::Option::Some(v);
-    }
-
-    pub fn get_from_ip(&self) -> u32 {
-        self.from_ip.unwrap_or(0)
-    }
-
-    fn get_from_ip_for_reflect(&self) -> &::std::option::Option<u32> {
-        &self.from_ip
-    }
-
-    fn mut_from_ip_for_reflect(&mut self) -> &mut ::std::option::Option<u32> {
-        &mut self.from_ip
-    }
-
-    // required uint32 from_port = 2;
-
-    pub fn clear_from_port(&mut self) {
-        self.from_port = ::std::option::Option::None;
-    }
-
-    pub fn has_from_port(&self) -> bool {
-        self.from_port.is_some()
+    pub fn has_heartbeat(&self) -> bool {
+        self.heartbeat.is_some()
     }
 
     // Param is passed by value, moved
-    pub fn set_from_port(&mut self, v: u32) {
-        self.from_port = ::std::option::Option::Some(v);
+    pub fn set_heartbeat(&mut self, v: u64) {
+        self.heartbeat = ::std::option::Option::Some(v);
     }
 
-    pub fn get_from_port(&self) -> u32 {
-        self.from_port.unwrap_or(0)
+    pub fn get_heartbeat(&self) -> u64 {
+        self.heartbeat.unwrap_or(0)
     }
 
-    fn get_from_port_for_reflect(&self) -> &::std::option::Option<u32> {
-        &self.from_port
+    fn get_heartbeat_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.heartbeat
     }
 
-    fn mut_from_port_for_reflect(&mut self) -> &mut ::std::option::Option<u32> {
-        &mut self.from_port
+    fn mut_heartbeat_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.heartbeat
     }
 
-    // repeated .Member members = 3;
+    // repeated .Member members = 2;
 
     pub fn clear_members(&mut self) {
         self.members.clear();
@@ -466,10 +438,7 @@ impl Gossip {
 
 impl ::protobuf::Message for Gossip {
     fn is_initialized(&self) -> bool {
-        if self.from_ip.is_none() {
-            return false;
-        }
-        if self.from_port.is_none() {
+        if self.heartbeat.is_none() {
             return false;
         }
         for v in &self.members {
@@ -488,17 +457,10 @@ impl ::protobuf::Message for Gossip {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
-                    let tmp = is.read_uint32()?;
-                    self.from_ip = ::std::option::Option::Some(tmp);
+                    let tmp = is.read_uint64()?;
+                    self.heartbeat = ::std::option::Option::Some(tmp);
                 },
                 2 => {
-                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
-                    }
-                    let tmp = is.read_uint32()?;
-                    self.from_port = ::std::option::Option::Some(tmp);
-                },
-                3 => {
                     ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.members)?;
                 },
                 _ => {
@@ -513,11 +475,8 @@ impl ::protobuf::Message for Gossip {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if let Some(v) = self.from_ip {
+        if let Some(v) = self.heartbeat {
             my_size += ::protobuf::rt::value_size(1, v, ::protobuf::wire_format::WireTypeVarint);
-        }
-        if let Some(v) = self.from_port {
-            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
         }
         for value in &self.members {
             let len = value.compute_size();
@@ -529,14 +488,11 @@ impl ::protobuf::Message for Gossip {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        if let Some(v) = self.from_ip {
-            os.write_uint32(1, v)?;
-        }
-        if let Some(v) = self.from_port {
-            os.write_uint32(2, v)?;
+        if let Some(v) = self.heartbeat {
+            os.write_uint64(1, v)?;
         }
         for v in &self.members {
-            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         };
@@ -584,15 +540,10 @@ impl ::protobuf::MessageStatic for Gossip {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
-                    "from_ip",
-                    Gossip::get_from_ip_for_reflect,
-                    Gossip::mut_from_ip_for_reflect,
-                ));
-                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
-                    "from_port",
-                    Gossip::get_from_port_for_reflect,
-                    Gossip::mut_from_port_for_reflect,
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "heartbeat",
+                    Gossip::get_heartbeat_for_reflect,
+                    Gossip::mut_heartbeat_for_reflect,
                 ));
                 fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Member>>(
                     "members",
@@ -611,8 +562,7 @@ impl ::protobuf::MessageStatic for Gossip {
 
 impl ::protobuf::Clear for Gossip {
     fn clear(&mut self) {
-        self.clear_from_ip();
-        self.clear_from_port();
+        self.clear_heartbeat();
         self.clear_members();
         self.unknown_fields.clear();
     }
@@ -633,9 +583,9 @@ impl ::protobuf::reflect::ProtobufValue for Gossip {
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\tmsg.proto\"H\n\x06Member\x12\n\n\x02ip\x18\x01\x20\x02(\r\x12\x0c\n\
     \x04port\x18\x02\x20\x02(\r\x12\x11\n\tsuspicion\x18\x03\x20\x02(\x01\
-    \x12\x11\n\theartbeat\x18\x04\x20\x02(\x04\"F\n\x06Gossip\x12\x0f\n\x07f\
-    rom_ip\x18\x01\x20\x02(\r\x12\x11\n\tfrom_port\x18\x02\x20\x02(\r\x12\
-    \x18\n\x07members\x18\x03\x20\x03(\x0b2\x07.Member\
+    \x12\x11\n\theartbeat\x18\x04\x20\x02(\x04\"5\n\x06Gossip\x12\x11\n\thea\
+    rtbeat\x18\x01\x20\x02(\x04\x12\x18\n\x07members\x18\x02\x20\x03(\x0b2\
+    \x07.Member\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

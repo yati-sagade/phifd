@@ -13,9 +13,10 @@ use futures::Future;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 
-use std::env;
 use std::net::SocketAddr;
-use phifd::{PhiFD, TickTock};
+use std::env;
+use std::time::Duration;
+use phifd::{PhiFD, Config};
 use phifd::util::member_from_address;
 use getopts::Options;
 use log::LogLevel;
@@ -53,18 +54,19 @@ fn main() {
         "intro",
         "address of an introducer node",
         "INTRODUCER_ADDR",
-    ).optflag(
-        "h", "help", "print this help menu and exit"
-    ).optopt(
-        "a",
-        "addr",
-        "address to listen on, by default 0.0.0.0:12345",
-        "ADDR"
-    ).optflag(
-        "t",
-        "ticktock",
-        "Run the simple code"
-    );
+    ).optflag("h", "help", "print this help menu and exit")
+        .optopt(
+            "a",
+            "addr",
+            "address to listen on, by default 0.0.0.0:12345",
+            "ADDR",
+        )
+        .optopt(
+            "t",
+            "ping_interval",
+            "how often, in integral seconds, to ping peers",
+            "INTERVAL",
+        );
 
 
     let matches = match opts.parse(&args[1..]) {
@@ -87,29 +89,32 @@ fn main() {
         );
     }
 
-    let addr = match matches.opt_str("addr") {
-        None => "0.0.0.0:12345".to_string(),
-        Some(a) => a,
-    };
 
-    if !matches.opt_present("ticktock") {
-        info!("starting failure detector now on {}", &addr);
-        let mut fd = if introducers.len() != 0 {
-            let members = introducers
-                .into_iter()
-                .map(|intro| member_from_address(&intro).unwrap())
-                .collect::<Vec<Member>>();
-            PhiFD::with_members(members)
-        } else {
-            PhiFD::new()
-        };
-        fd.run(&addr);
-    } else {
-        info!("running ticktock on {}", &addr);
-        let addrs = introducers
+    let mut cfg = Config::default();
+    cfg.set_ping_interval(Duration::from_millis(
+        matches
+            .opt_str("ping_interval")
+            .map(|s| s.parse::<u64>().expect("invalid number of secs"))
+            .unwrap_or(1) * 1000,
+    ));
+
+    let addr = matches
+        .opt_str("addr")
+        .unwrap_or("0.0.0.0:12345".to_string())
+        .parse::<SocketAddr>()
+        .expect("invalid listen address");
+
+    cfg.set_addr(addr);
+
+    info!("starting failure detector now on {}", &addr);
+    let mut fd = if introducers.len() != 0 {
+        let members = introducers
             .into_iter()
-            .map(|intro| intro.parse::<SocketAddr>().unwrap())
-            .collect::<Vec<_>>();
-        TickTock::new(addrs).run(&addr);
-    }
+            .map(|intro| member_from_address(&intro).unwrap())
+            .collect::<Vec<Member>>();
+        PhiFD::with_members(members, Some(cfg))
+    } else {
+        PhiFD::new(Some(cfg))
+    };
+    fd.run();
 }

@@ -3,7 +3,6 @@ extern crate futures;
 extern crate tokio_io;
 #[macro_use]
 extern crate log;
-#[macro_use]
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
@@ -13,18 +12,15 @@ extern crate time;
 extern crate rand;
 
 use std::cell::RefCell;
-use std::env;
 use std::rc::Rc;
-use std::io::{self, Read, Write};
-use std::sync::Arc;
+use std::io;
 use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::cmp::min;
-use std::iter;
 
-use rand::{Rng, thread_rng, seq};
-use futures::{Future, Poll, Async, Stream, Sink, stream, StartSend, AsyncSink};
+use rand::{thread_rng, seq};
+use futures::{Stream, stream};
 use tokio_core::net::{UdpSocket, UdpCodec};
 use tokio_core::reactor::{Core, Interval};
 use proto::msg::{Gossip, Member};
@@ -36,7 +32,10 @@ pub mod util;
 pub use util::*;
 
 fn unix_timestamp() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 struct InterArrivalWindow {
@@ -46,12 +45,6 @@ struct InterArrivalWindow {
 }
 
 pub struct PhiFD {
-    /*
-    inter_arrival_windows: HashMap<u16, InterArrivalWindow>,
-    members: Rc<RefCell<Vec<Member>>>,
-    timestamps: Rc<RefCell<HashMap<(u32, u16), u64>>>,
-    ping_interval: Duration,
-    num_members_to_ping: u8,*/
     state: Rc<RefCell<FDState>>,
 }
 
@@ -63,105 +56,140 @@ enum FDEvent {
 use FDEvent::*;
 
 struct FDState {
-    /*
-    inter_arrival_windows: HashMap::new(),
-    members: Rc::new(RefCell::new(vec![])),
-    ping_interval: Duration::from_millis(1000),
-    timestamps: Rc::new(RefCell::new(HashMap::new())),
-    num_members_to_ping: 3,
-    */
     inter_arrival_windows: HashMap<u16, InterArrivalWindow>,
     members: Vec<Member>,
     timestamps: HashMap<(u32, u16), u64>,
-    ping_interval: Duration,
-    num_members_to_ping: u8,
+    config: Config,
+    heartbeat: u64,
 }
 
 impl FDState {
-    fn new() -> FDState {
+    fn new(config: Option<Config>) -> FDState {
+        let config = config.unwrap_or(Config::default());
         FDState {
             inter_arrival_windows: HashMap::new(),
             members: vec![],
-            ping_interval: Duration::from_millis(1000),
             timestamps: HashMap::new(),
-            num_members_to_ping: 3,
+            config: config,
+            heartbeat: 0u64,
         }
     }
-    fn with_members(members: Vec<Member>) -> FDState {
-        let mut ret = FDState::new();
+
+    fn epoch(&mut self) {
+        self.heartbeat += 1;
+    }
+
+    fn cur_heartbeat(&self) -> u64 {
+        self.heartbeat
+    }
+
+    fn with_members(members: Vec<Member>, config: Option<Config>) -> FDState {
+        let mut ret = FDState::new(config);
         ret.members.extend(members.into_iter());
         ret
     }
 
-    fn merge(&mut self, _from_addr: SocketAddr, mut gossip: Gossip) {
-        info!("merging state");
+    fn merge(&mut self, from_addr: SocketAddr, mut gossip: Gossip) {
         let mut incoming_members: HashMap<(u32, u32), Member> = HashMap::new();
 
-        let (_from_ip, _from_port) = (gossip.get_from_ip(), gossip.get_from_port());
+        let mut sender = member_from_sockaddr(from_addr).expect("error recovering who pinged us");
+        sender.set_heartbeat(gossip.get_heartbeat());
 
+        // FIXME: don't do this over and over
+        let (our_ip, our_port) = ip_number_and_port_from_sockaddr(self.config.addr)
+            .map(|(a, b)| (a as u32, b as u32))
+            .expect("could not parse our own ip/port?");
+
+
+        incoming_members.insert((sender.get_ip(), sender.get_port()), sender);
         for incoming_member in gossip.take_members().into_iter() {
             let ip = incoming_member.get_ip();
             let port = incoming_member.get_port();
-            incoming_members.insert(
-                (ip, port),
-                incoming_member
-            );
+            // FIXME: when we listen on 0.0.0.0:$port and someone pings us
+            // via 127.0.0.1:$port, we will inject ourselves in our own memberlist.
+            if (ip, port) != (our_ip, our_port) {
+                incoming_members.insert((ip, port), incoming_member);
+            }
         }
-        
+
         for member in self.members.iter_mut() {
             let key = (member.get_ip(), member.get_port());
             let incoming_member = incoming_members.remove(&key);
             if let Some(incoming_member) = incoming_member {
                 if incoming_member.get_heartbeat() > member.get_heartbeat() {
                     member.set_heartbeat(incoming_member.get_heartbeat());
-                    self.timestamps.insert((member.get_ip(), member.get_port() as u16),
-                        unix_timestamp());
+                    self.timestamps.insert(
+                        (member.get_ip(), member.get_port() as u16),
+                        unix_timestamp(),
+                    );
                 }
             }
         }
-        
+
         for (_, incoming_member) in incoming_members.into_iter() {
             let ip = incoming_member.get_ip();
             let port = incoming_member.get_port() as u16;
             self.members.push(incoming_member);
             self.timestamps.insert((ip, port), unix_timestamp());
-                
+
         }
-        info!("have {:?}, {:?} in the end", &self.members, &self.timestamps);
+    }
+}
+
+pub struct Config {
+    ping_interval: Duration, // seconds
+    num_members_to_ping: u8,
+    addr: SocketAddr,
+}
+
+impl Config {
+    pub fn default() -> Config {
+        Config {
+            ping_interval: Duration::from_millis(1000),
+            num_members_to_ping: 3,
+            addr: "0.0.0.0:12345".parse::<SocketAddr>().unwrap(),
+        }
+    }
+
+    pub fn set_ping_interval(&mut self, interval: Duration) -> &mut Config {
+        self.ping_interval = interval;
+        self
+    }
+
+    pub fn set_num_members_to_ping(&mut self, n: u8) -> &mut Config {
+        self.num_members_to_ping = n;
+        self
+    }
+
+    pub fn set_addr(&mut self, addr: SocketAddr) -> &mut Config {
+        self.addr = addr;
+        self
     }
 }
 
 impl PhiFD {
-    pub fn new() -> PhiFD {
-        PhiFD {
-            state: Rc::new(RefCell::new(FDState::new())),
-        }
+    pub fn new(config: Option<Config>) -> PhiFD {
+        PhiFD { state: Rc::new(RefCell::new(FDState::new(config))) }
     }
 
-    pub fn with_members(members: Vec<Member>) -> PhiFD {
-        PhiFD {
-            state: Rc::new(RefCell::new(FDState::with_members(members))),
-        }
+    pub fn with_members(members: Vec<Member>, config: Option<Config>) -> PhiFD {
+        PhiFD { state: Rc::new(RefCell::new(FDState::with_members(members, config))) }
     }
 
-    fn merge(&mut self, addr_from: SocketAddr, gossip: Gossip) {
-        info!("Going to merge gossip from {:?}", &addr_from);
-    }
-
-    pub fn run(&mut self, addr: &str) {
-        let addr_orig = addr;
-        let addr = addr.parse::<SocketAddr>().unwrap();
+    pub fn run(&mut self) {
         let mut core = Core::new().unwrap();
         let handle = core.handle();
-        let dur = self.state.borrow().ping_interval.clone();
+        let dur = self.state.borrow().config.ping_interval.clone();
         let ticker = Interval::new(dur, &handle).unwrap();
 
-        let conn = UdpSocket::bind(&addr, &handle).unwrap();
+        let state = &self.state;
+        let listen_addr = state.borrow().config.addr.clone();
+
+        let conn = UdpSocket::bind(&listen_addr, &handle).unwrap();
         let (sink, stream) = conn.framed(GossipCodec).split();
 
-        let num_members_to_ping = self.state.borrow().num_members_to_ping as usize;
+        let num_members_to_ping = self.state.borrow().config.num_members_to_ping as usize;
 
-        let state = &self.state;
 
         let pinger = ticker.and_then(|_| {
             // pick up to k members to ping from membership list that are alive
@@ -169,19 +197,21 @@ impl PhiFD {
             let nmembers = state.borrow().members.len();
             let k = min(num_members_to_ping, nmembers);
 
-            info!("Going to ping {} members now (have {} members)", k, nmembers);
+            let sample_indices = seq::sample_indices(&mut rng, nmembers, k);
 
-            let sample_indices = seq::sample_indices(
-                &mut rng, nmembers, k
-            );
+            let cur_heartbeat = state.borrow().cur_heartbeat();
 
             let pings = sample_indices
                 .into_iter()
                 .map(|idx| {
                     let to_addr = member_addr(&state.borrow().members[idx]);
-                    let gossip = make_gossip(to_addr, &state.borrow().members).unwrap();
+                    let gossip = make_gossip(to_addr, cur_heartbeat, &state.borrow().members)
+                        .unwrap();
                     (to_addr, gossip)
-                }).collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
+
+            state.borrow_mut().epoch();
 
             Ok(PingOut(pings))
         });
@@ -193,16 +223,19 @@ impl PhiFD {
 
         let fut = pinger
             .select(ping_listener)
-            .filter_map(|evt| {
-                match evt {
-                    PingOut(ping_outs) => {
-                        info!("going to ping {:?}", &ping_outs);
-                        Some(stream::iter_ok::<_, io::Error>(ping_outs.into_iter()))
-                    }
-                    FDEvent::StateUpdated => {
-                        info!("state updated");
-                        None
-                    }
+            .filter_map(|evt| match evt {
+                PingOut(ping_outs) => {
+                    info!(
+                        "going to ping {} member{} now (total {})",
+                        ping_outs.len(),
+                        if ping_outs.len() == 1 { "" } else { "s" },
+                        state.borrow().members.len()
+                    );
+                    Some(stream::iter_ok::<_, io::Error>(ping_outs.into_iter()))
+                }
+                FDEvent::StateUpdated => {
+                    info!("state updated");
+                    None
                 }
             })
             .flatten()
@@ -212,51 +245,6 @@ impl PhiFD {
     }
 }
 
-enum IntermediateResult {
-    NoResult,
-    MembershipList(Vec<Member>),
-}
-
-use IntermediateResult::*;
-
-fn merge(mut gossip: Gossip, members: &mut Vec<Member>,
-         timestamps: &mut HashMap<(u32, u16), u64>) {
-
-    let mut incoming_members: HashMap<(u32, u32), Member> = HashMap::new();
-
-    let (_from_ip, _from_port) = (gossip.get_from_ip(), gossip.get_from_port());
-
-    for incoming_member in gossip.take_members().into_iter() {
-        let ip = incoming_member.get_ip();
-        let port = incoming_member.get_port();
-        incoming_members.insert(
-            (ip, port),
-            incoming_member
-        );
-    }
-    
-    for member in members.iter_mut() {
-        let key = (member.get_ip(), member.get_port());
-        let incoming_member = incoming_members.remove(&key);
-        if let Some(incoming_member) = incoming_member {
-            if incoming_member.get_heartbeat() > member.get_heartbeat() {
-                member.set_heartbeat(incoming_member.get_heartbeat());
-                timestamps.insert((member.get_ip(), member.get_port() as u16),
-                    unix_timestamp());
-            }
-        }
-    }
-    
-    for (_, incoming_member) in incoming_members.into_iter() {
-        let ip = incoming_member.get_ip();
-        let port = incoming_member.get_port() as u16;
-        members.push(incoming_member);
-        timestamps.insert((ip, port), unix_timestamp());
-            
-    }
-    // TODO: Remove crap from `timestamps`.
-}
-
 pub struct GossipCodec;
 
 impl UdpCodec for GossipCodec {
@@ -264,120 +252,19 @@ impl UdpCodec for GossipCodec {
     type Out = (SocketAddr, Gossip);
 
     fn decode(&mut self, src: &SocketAddr, buf: &[u8]) -> io::Result<Self::In> {
+        info!("datagram received from {:?}", src);
+        // TODO: this crashes when an old version of the FD pings us.
         let gossip = parse_from_bytes::<Gossip>(buf).unwrap();
         Ok((*src, gossip))
     }
 
     fn encode(&mut self, (addr, msg): Self::Out, buf: &mut Vec<u8>) -> SocketAddr {
-        msg.write_to_vec(buf).unwrap();
+        msg.write_to_vec(buf).expect(
+            "an error occurred writing to the udp socket",
+        );
         addr
     }
 }
-
-pub enum What {
-    SendPing,
-    HandlePing(SocketAddr, u64),
-}
-
-use What::*;
-
-pub struct SimpleCodec;
-
-impl UdpCodec for SimpleCodec {
-    type In = (SocketAddr, u64);
-    type Out = (SocketAddr, u64);
-
-    fn decode(&mut self, src: &SocketAddr, buf: &[u8]) -> io::Result<Self::In> {
-        let mut result = 0;
-        for i in 0..8 {
-            result |= (buf[i] as u64) << (i * 8);
-        }
-        Ok((*src, result))
-    }
-
-    fn encode(&mut self, (addr, msg): Self::Out, buf: &mut Vec<u8>) -> SocketAddr {
-        for i in 0..8 {
-            buf.push(((msg >> (i * 8)) | 0xff) as u8);
-        }
-        addr
-    }
-}
-
-pub struct TickTock {
-    heard: Rc<RefCell<HashMap<SocketAddr, u64>>>,
-    curval: u64,
-}
-
-enum Event {
-    PingSend(SocketAddr, u64),
-    StateUpdated,
-    Nothing,
-}
-
-use Event::*;
-
-
-impl TickTock {
-    pub fn new(introducers: Vec<SocketAddr>) -> TickTock {
-        let mut map = HashMap::new();
-        for intro in introducers.into_iter() {
-            map.insert(intro, 0);
-        }
-        TickTock { heard: Rc::new(RefCell::new(map)), curval: 0 }
-    }
-
-    pub fn run(&mut self, bind_addr: &str) {
-        let addr = bind_addr.parse::<SocketAddr>().unwrap();
-
-        let mut core = Core::new().unwrap();
-        let handle = core.handle();
-
-        let dur = Duration::from_millis(1000);
-        let ticker = Interval::new(dur, &handle).unwrap();
-
-        let conn = UdpSocket::bind(&addr, &handle).unwrap();
-        let (sink, stream) = conn.framed(SimpleCodec).split();
-
-        let id = 42;
-
-        let ticker = ticker.and_then(|_| {
-            info!("tick");
-            Ok(self.heard.borrow()
-               .keys()
-               .next()
-               .map(|key| PingSend(key.clone(), id))
-               .unwrap_or(Nothing))
-        });
-
-        let ping_listener = stream.and_then(|(addr_from, value)| {
-            self.heard.borrow_mut().insert(addr_from, value);
-            Ok(Event::StateUpdated)
-        });
-
-        let fut = ticker
-            .select(ping_listener)
-            .filter_map(|evt| {
-                match evt {
-                    Nothing => {
-                        info!("nothing to do");
-                        None
-                    },
-                    Event::StateUpdated => {
-                        info!("state updated");
-                        None
-                    },
-                    PingSend(to, val) => {
-                        info!("will ping {:?}", &to);
-                        Some((to, val))
-                    },
-                }
-            }).forward(sink);
-
-        core.run(fut).unwrap();
-    }
-}
-
-
 
 #[cfg(test)]
 mod tests {
