@@ -14,7 +14,8 @@ use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 
 use std::env;
-use phifd::PhiFD;
+use std::net::SocketAddr;
+use phifd::{PhiFD, TickTock};
 use phifd::util::member_from_address;
 use getopts::Options;
 use log::LogLevel;
@@ -59,7 +60,12 @@ fn main() {
         "addr",
         "address to listen on, by default 0.0.0.0:12345",
         "ADDR"
+    ).optflag(
+        "t",
+        "ticktock",
+        "Run the simple code"
     );
+
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -86,15 +92,24 @@ fn main() {
         Some(a) => a,
     };
 
-    info!("starting failure detector now on {}", &addr);
-    let mut fd = if introducers.len() != 0 {
-        let members = introducers
-            .into_iter()
-            .map(|intro| member_from_address(&intro).unwrap())
-            .collect::<Vec<Member>>();
-        PhiFD::with_members(members)
+    if !matches.opt_present("ticktock") {
+        info!("starting failure detector now on {}", &addr);
+        let mut fd = if introducers.len() != 0 {
+            let members = introducers
+                .into_iter()
+                .map(|intro| member_from_address(&intro).unwrap())
+                .collect::<Vec<Member>>();
+            PhiFD::with_members(members)
+        } else {
+            PhiFD::new()
+        };
+        fd.run(&addr);
     } else {
-        PhiFD::new()
-    };
-    fd.run(&addr);
+        info!("running ticktock on {}", &addr);
+        let addrs = introducers
+            .into_iter()
+            .map(|intro| intro.parse::<SocketAddr>().unwrap())
+            .collect::<Vec<_>>();
+        TickTock::new(addrs).run(&addr);
+    }
 }
