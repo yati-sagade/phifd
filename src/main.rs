@@ -28,21 +28,6 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn _main() {
-    let mut core = Core::new().unwrap();
-    let addr = "0.0.0.0:12345".parse().unwrap();
-    let handle = core.handle();
-    let listener = TcpListener::bind(&addr, &handle).unwrap();
-
-    let connections = listener.incoming();
-    let server = connections.for_each(|(sock, _peer_addr)| {
-        let serve = tokio_io::io::write_all(sock, b"hello, world!\n").then(|_| Ok(()));
-        handle.spawn(serve);
-        Ok(())
-    });
-    core.run(server).unwrap();
-}
-
 fn main() {
     simple_logger::init_with_level(LogLevel::Info).unwrap();
     let args: Vec<String> = env::args().collect();
