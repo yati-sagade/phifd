@@ -27,18 +27,14 @@ pub fn member_from_sockaddr(addr: SocketAddr) -> Result<Member, AddrParseError> 
     Ok(member)
 }
 
-pub fn make_gossip(
-    addr: SocketAddr,
-    heartbeat: u64,
-    members: &Vec<Member>,
-) -> Result<Gossip, AddrParseError> {
-    let (ip, port) = ip_number_and_port_from_sockaddr(addr)?;
+pub fn make_gossip<I>(heartbeat: u64, members: I) -> Gossip 
+        where I: Iterator<Item=Member> {
     let mut gossip = Gossip::new();
     gossip.set_heartbeat(heartbeat);
     for member in members {
         gossip.mut_members().push(member.clone());
     }
-    Ok(gossip)
+    gossip
 }
 
 pub fn member_addr(member: &Member) -> SocketAddr {

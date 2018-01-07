@@ -17,7 +17,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::cmp::min;
+use std::cmp;
 
 use rand::{thread_rng, seq};
 use futures::{Stream, stream};
@@ -38,6 +38,7 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
+#[derive(Clone, Debug)]
 struct InterArrivalWindow {
     mean: f64,
     variance: f64,
@@ -55,10 +56,47 @@ enum FDEvent {
 
 use FDEvent::*;
 
+/// This type is used to identify a member uniquely using its IPv4 number and
+/// port.
+type MemberID = (u32, u16);
+
+/// This stores this process' knowledge about a given member at any given time.
+#[derive(Clone, Debug)]
+struct MemberState {
+
+    /// Information about the member that we need to gossip with other peers.
+    member: Member,
+
+    /// The last UNIX time when this member's state was updated.
+    timestamp: u64,
+
+    /// Book keeping for estimating the distribution of inter-arrival times of
+    /// pings from this node.
+    inter_arrival_windows: Option<InterArrivalWindow>,
+}
+
+impl MemberState {
+    fn from_member(member: Member) -> MemberState {
+        MemberState {
+            member: member,
+            timestamp: unix_timestamp(),
+            inter_arrival_windows: None,
+        }
+    }
+
+    fn merge(&mut self, suspicion: f64, heartbeat: u64) {
+        if self.member.get_heartbeat() < heartbeat {
+            self.member.set_heartbeat(heartbeat);
+        }
+    }
+
+    fn get_id(&self) -> MemberID {
+        (self.member.get_ip(), self.member.get_port() as u16)
+    }
+}
+
 struct FDState {
-    inter_arrival_windows: HashMap<u16, InterArrivalWindow>,
-    members: Vec<Member>,
-    timestamps: HashMap<(u32, u16), u64>,
+    members: HashMap<MemberID, MemberState>,
     config: Config,
     heartbeat: u64,
 }
@@ -67,9 +105,7 @@ impl FDState {
     fn new(config: Option<Config>) -> FDState {
         let config = config.unwrap_or(Config::default());
         FDState {
-            inter_arrival_windows: HashMap::new(),
-            members: vec![],
-            timestamps: HashMap::new(),
+            members: HashMap::new(),
             config: config,
             heartbeat: 0u64,
         }
@@ -85,53 +121,62 @@ impl FDState {
 
     fn with_members(members: Vec<Member>, config: Option<Config>) -> FDState {
         let mut ret = FDState::new(config);
-        ret.members.extend(members.into_iter());
+        for member in members.into_iter() {
+            let ip = member.get_ip();
+            let port = member.get_port() as u16;
+            ret.members.insert((ip, port), MemberState::from_member(member));
+        }
         ret
     }
 
     fn merge(&mut self, from_addr: SocketAddr, mut gossip: Gossip) {
-        let mut incoming_members: HashMap<(u32, u32), Member> = HashMap::new();
 
-        let mut sender = member_from_sockaddr(from_addr).expect("error recovering who pinged us");
+        /* 1. We consider the sender node and the nodes present in the gossip.
+         * 2. For each node considered, we check if their id (ip, port) is
+         * in our membership list. If not there, we insert an entry. If there,
+         * we need to merge the incoming knowledge with what we know. In reality,
+         * we merge for both these cases anyway, because the .or_insert() API
+         * is convenient. */
+
+        let mut sender = member_from_sockaddr(from_addr)
+                         .expect("error recovering who pinged us");
         sender.set_heartbeat(gossip.get_heartbeat());
 
         // FIXME: don't do this over and over
-        let (our_ip, our_port) = ip_number_and_port_from_sockaddr(self.config.addr)
-            .map(|(a, b)| (a as u32, b as u32))
+        let our_addr = ip_number_and_port_from_sockaddr(self.config.addr)
             .expect("could not parse our own ip/port?");
 
 
-        incoming_members.insert((sender.get_ip(), sender.get_port()), sender);
+        // handle the sender
+        let snd_ip = sender.get_ip();
+        let snd_port = sender.get_port() as u16;
+        let snd_addr = (snd_ip, snd_port);
+
+        if our_addr != snd_addr {
+            let heartbeat = sender.get_heartbeat();
+            let susp = sender.get_suspicion();
+            self.members.entry(snd_addr)
+                .or_insert_with(move || MemberState::from_member(sender))
+                .merge(susp, heartbeat);
+        } else {
+            warn!("We sent a ping to ourselves");
+        }
+
         for incoming_member in gossip.take_members().into_iter() {
-            let ip = incoming_member.get_ip();
-            let port = incoming_member.get_port();
-            // FIXME: when we listen on 0.0.0.0:$port and someone pings us
-            // via 127.0.0.1:$port, we will inject ourselves in our own memberlist.
-            if (ip, port) != (our_ip, our_port) {
-                incoming_members.insert((ip, port), incoming_member);
-            }
-        }
 
-        for member in self.members.iter_mut() {
-            let key = (member.get_ip(), member.get_port());
-            let incoming_member = incoming_members.remove(&key);
-            if let Some(incoming_member) = incoming_member {
-                if incoming_member.get_heartbeat() > member.get_heartbeat() {
-                    member.set_heartbeat(incoming_member.get_heartbeat());
-                    self.timestamps.insert(
-                        (member.get_ip(), member.get_port() as u16),
-                        unix_timestamp(),
-                    );
-                }
-            }
-        }
-
-        for (_, incoming_member) in incoming_members.into_iter() {
             let ip = incoming_member.get_ip();
             let port = incoming_member.get_port() as u16;
-            self.members.push(incoming_member);
-            self.timestamps.insert((ip, port), unix_timestamp());
+            let addr = (ip, port);
 
+            if addr != our_addr {
+                let susp = incoming_member.get_suspicion();
+                let heartbeat = incoming_member.get_heartbeat();
+                self.members.entry(addr)
+                    .or_insert_with(move || MemberState::from_member(incoming_member))
+                    .merge(susp, heartbeat);
+            } else {
+                warn!("We sent a ping to ourselves");
+            }
         }
     }
 }
@@ -188,28 +233,35 @@ impl PhiFD {
         let conn = UdpSocket::bind(&listen_addr, &handle).unwrap();
         let (sink, stream) = conn.framed(GossipCodec).split();
 
-        let num_members_to_ping = self.state.borrow().config.num_members_to_ping as usize;
-
+        let num_members_to_ping =
+            state.borrow().config.num_members_to_ping as usize;
 
         let pinger = ticker.and_then(|_| {
             // pick up to k members to ping from membership list that are alive
             let mut rng = thread_rng();
             let nmembers = state.borrow().members.len();
-            let k = min(num_members_to_ping, nmembers);
+            let k = cmp::min(num_members_to_ping, nmembers);
 
             let sample_indices = seq::sample_indices(&mut rng, nmembers, k);
 
+
             let cur_heartbeat = state.borrow().cur_heartbeat();
 
-            let pings = sample_indices
-                .into_iter()
-                .map(|idx| {
-                    let to_addr = member_addr(&state.borrow().members[idx]);
-                    let gossip = make_gossip(to_addr, cur_heartbeat, &state.borrow().members)
-                        .unwrap();
-                    (to_addr, gossip)
-                })
-                .collect::<Vec<_>>();
+            let ping_addrs = seq::sample_iter(
+                &mut rng,
+                state.borrow().members.values(),
+                nmembers
+            ).map(|values| {
+                values.iter().map(|v| member_addr(&v.member)).collect::<Vec<_>>()
+            }).unwrap_or(vec![]);
+
+            let pings = ping_addrs.into_iter().map(|addr| {
+                let gossip = make_gossip(cur_heartbeat,
+                                         state.borrow().members.values().map(|m| {
+                                             m.member.clone()
+                                         }));
+                (addr, gossip)
+            }).collect::<Vec<_>>();
 
             state.borrow_mut().epoch();
 
