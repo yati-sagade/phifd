@@ -87,6 +87,7 @@ impl MemberState {
     fn merge(&mut self, suspicion: f64, heartbeat: u64) {
         if self.member.get_heartbeat() < heartbeat {
             self.member.set_heartbeat(heartbeat);
+            self.timestamp = unix_timestamp();
         }
     }
 
