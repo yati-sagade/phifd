@@ -1,6 +1,34 @@
 use proto::msg::{Member, Gossip};
 use std::net::{SocketAddr, AddrParseError, IpAddr, Ipv4Addr};
 
+#[derive(Clone, Debug)]
+pub enum GossipType {
+    Syn,
+    Ack,
+}
+
+impl GossipType {
+    pub fn from_u32(v: u32) -> Option<GossipType> {
+        if v == 0 {
+            Some(GossipType::Syn)
+        } else if v == 1 {
+            Some(GossipType::Ack)
+        } else {
+            None
+        }
+    }
+}
+
+impl Into<u32> for GossipType {
+    fn into(self) -> u32 {
+        match self.clone() {
+            GossipType::Ack => 1,
+            GossipType::Syn => 0,
+        }
+    }
+}
+
+
 pub fn ip_number_and_port_from_sockaddr(addr: SocketAddr) -> Result<(u32, u16), AddrParseError> {
     if let SocketAddr::V4(addr) = addr {
         let octets = addr.ip().octets();
@@ -27,9 +55,10 @@ pub fn member_from_sockaddr(addr: SocketAddr) -> Result<Member, AddrParseError> 
     Ok(member)
 }
 
-pub fn make_gossip<I>(heartbeat: u64, members: I) -> Gossip 
+pub fn make_gossip<I>(heartbeat: u64, members: I, typ: GossipType) -> Gossip 
         where I: Iterator<Item=Member> {
     let mut gossip = Gossip::new();
+    gossip.set_kind(typ.into());
     gossip.set_heartbeat(heartbeat);
     for member in members {
         gossip.mut_members().push(member.clone());
@@ -47,3 +76,5 @@ pub fn member_addr(member: &Member) -> SocketAddr {
     let port = member.get_port() as u16;
     SocketAddr::new(ipaddr, port)
 }
+
+

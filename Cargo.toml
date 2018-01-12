@@ -10,7 +10,7 @@ protoc-rust="1.4"
 time = "0.1"
 bytes = "0.4"
 futures="0.1"
-probability="*"
+statrs="0.9.0"
 protobuf= { version="1.4", features=["with-bytes"] }
 
 tokio-io="0.1"

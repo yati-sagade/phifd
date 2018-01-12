@@ -351,6 +351,7 @@ impl ::protobuf::reflect::ProtobufValue for Member {
 pub struct Gossip {
     // message fields
     heartbeat: ::std::option::Option<u64>,
+    kind: ::std::option::Option<u32>,
     members: ::protobuf::RepeatedField<Member>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
@@ -402,7 +403,34 @@ impl Gossip {
         &mut self.heartbeat
     }
 
-    // repeated .Member members = 2;
+    // required uint32 kind = 2;
+
+    pub fn clear_kind(&mut self) {
+        self.kind = ::std::option::Option::None;
+    }
+
+    pub fn has_kind(&self) -> bool {
+        self.kind.is_some()
+    }
+
+    // Param is passed by value, moved
+    pub fn set_kind(&mut self, v: u32) {
+        self.kind = ::std::option::Option::Some(v);
+    }
+
+    pub fn get_kind(&self) -> u32 {
+        self.kind.unwrap_or(0)
+    }
+
+    fn get_kind_for_reflect(&self) -> &::std::option::Option<u32> {
+        &self.kind
+    }
+
+    fn mut_kind_for_reflect(&mut self) -> &mut ::std::option::Option<u32> {
+        &mut self.kind
+    }
+
+    // repeated .Member members = 3;
 
     pub fn clear_members(&mut self) {
         self.members.clear();
@@ -441,6 +469,9 @@ impl ::protobuf::Message for Gossip {
         if self.heartbeat.is_none() {
             return false;
         }
+        if self.kind.is_none() {
+            return false;
+        }
         for v in &self.members {
             if !v.is_initialized() {
                 return false;
@@ -461,6 +492,13 @@ impl ::protobuf::Message for Gossip {
                     self.heartbeat = ::std::option::Option::Some(tmp);
                 },
                 2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint32()?;
+                    self.kind = ::std::option::Option::Some(tmp);
+                },
+                3 => {
                     ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.members)?;
                 },
                 _ => {
@@ -478,6 +516,9 @@ impl ::protobuf::Message for Gossip {
         if let Some(v) = self.heartbeat {
             my_size += ::protobuf::rt::value_size(1, v, ::protobuf::wire_format::WireTypeVarint);
         }
+        if let Some(v) = self.kind {
+            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
+        }
         for value in &self.members {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
@@ -491,8 +532,11 @@ impl ::protobuf::Message for Gossip {
         if let Some(v) = self.heartbeat {
             os.write_uint64(1, v)?;
         }
+        if let Some(v) = self.kind {
+            os.write_uint32(2, v)?;
+        }
         for v in &self.members {
-            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         };
@@ -545,6 +589,11 @@ impl ::protobuf::MessageStatic for Gossip {
                     Gossip::get_heartbeat_for_reflect,
                     Gossip::mut_heartbeat_for_reflect,
                 ));
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
+                    "kind",
+                    Gossip::get_kind_for_reflect,
+                    Gossip::mut_kind_for_reflect,
+                ));
                 fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Member>>(
                     "members",
                     Gossip::get_members_for_reflect,
@@ -563,6 +612,7 @@ impl ::protobuf::MessageStatic for Gossip {
 impl ::protobuf::Clear for Gossip {
     fn clear(&mut self) {
         self.clear_heartbeat();
+        self.clear_kind();
         self.clear_members();
         self.unknown_fields.clear();
     }
@@ -583,9 +633,9 @@ impl ::protobuf::reflect::ProtobufValue for Gossip {
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\tmsg.proto\"H\n\x06Member\x12\n\n\x02ip\x18\x01\x20\x02(\r\x12\x0c\n\
     \x04port\x18\x02\x20\x02(\r\x12\x11\n\tsuspicion\x18\x03\x20\x02(\x01\
-    \x12\x11\n\theartbeat\x18\x04\x20\x02(\x04\"5\n\x06Gossip\x12\x11\n\thea\
-    rtbeat\x18\x01\x20\x02(\x04\x12\x18\n\x07members\x18\x02\x20\x03(\x0b2\
-    \x07.Member\
+    \x12\x11\n\theartbeat\x18\x04\x20\x02(\x04\"C\n\x06Gossip\x12\x11\n\thea\
+    rtbeat\x18\x01\x20\x02(\x04\x12\x0c\n\x04kind\x18\x02\x20\x02(\r\x12\x18\
+    \n\x07members\x18\x03\x20\x03(\x0b2\x07.Member\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

@@ -7,5 +7,7 @@ message Member {
 
 message Gossip {
     required uint64 heartbeat = 1;
-    repeated Member members = 2;
+    // The kind of gossip, can be 0 (SYN) and 1 (ACK)
+    required uint32 kind = 2;
+    repeated Member members = 3;
 }
