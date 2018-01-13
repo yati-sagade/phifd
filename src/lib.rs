@@ -8,6 +8,7 @@ extern crate tokio_proto;
 extern crate tokio_service;
 #[macro_use]
 extern crate statrs;
+
 extern crate protobuf;
 extern crate time;
 extern crate rand;
@@ -16,8 +17,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::io;
 use std::net::SocketAddr;
-use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH, Instant};
+use std::collections::HashMap;
 use std::cmp;
 
 use rand::{thread_rng, seq};
@@ -25,99 +26,18 @@ use futures::{Stream, stream};
 use tokio_core::net::{UdpSocket, UdpCodec};
 use tokio_core::reactor::{Core, Interval};
 use proto::msg::{Gossip, Member};
+use member::{MemberState, MemberID};
 use protobuf::core::{Message, parse_from_bytes};
-use statrs::distribution::{Distribution, Normal, Univariate};
-use statrs::statistics::{Mean, Variance, Statistics};
 
 pub mod proto;
 pub mod util;
 pub mod config;
+pub mod member;
 
 pub use config::*;
 pub use util::*;
+pub use member::*;
 
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
-#[derive(Clone, Debug)]
-struct InterArrivalWindow {
-    distribution: Option<Normal>,
-    window: VecDeque<Duration>,
-    last_arrival_at: Option<Instant>,
-    size: usize,
-}
-
-
-impl InterArrivalWindow {
-
-    fn of_size(size: usize) -> InterArrivalWindow {
-        assert!(size >= 3);
-        InterArrivalWindow {
-            distribution: None,
-            window: VecDeque::with_capacity(size),
-            size: size,
-            last_arrival_at: None,
-        }
-    }
-
-    fn update(&mut self, value: Duration) {
-        if self.window.len() == self.size {
-            self.window.pop_front().expect("zero window size encountered");
-        }
-        self.window.push_back(value);
-        if self.window.len() >= 2 {
-
-            let raw_secs = self.window.iter().map(|dur| {
-                dur.as_secs() as f64 + dur.subsec_nanos() as f64 * 1e-9
-            }).collect::<Vec<f64>>();
-
-            let mu = Statistics::mean(&raw_secs);
-            let sigma = Statistics::variance(&raw_secs).sqrt();
-            self.distribution = Some(Normal::new(mu, sigma)
-                                     .expect("failed to create a normal distribution object!"));
-        }
-    }   
-
-    fn mean(&self) -> Option<f64> {
-        self.distribution.map(|d| d.mean())
-    }
-
-    fn variance(&self) -> Option<f64> {
-        self.distribution.map(|d| d.variance())
-    }
-
-    fn tick(&mut self, arrival_time: Instant) {
-        if let Some(last_arrival) = self.last_arrival_at {
-            self.update(arrival_time.duration_since(last_arrival));
-        }
-        self.last_arrival_at = Some(arrival_time);
-    }
-
-    fn phi(&self, at: Instant) -> Option<f64> {
-        if let Some(last_arrival) = self.last_arrival_at {
-            if last_arrival > at {
-                None
-            } else {
-                self.distribution.map(|dist| {
-                    let dur = at.duration_since(last_arrival);
-                    let dur_secs = dur.as_secs() as f64 +
-                        dur.subsec_nanos() as f64 * 1e-9;
-                    -(1.0 - dist.cdf(dur_secs)).log10()
-                })
-            }
-        } else {
-            None
-        }
-    }
-
-    fn phi_now(&self) -> Option<f64> {
-        self.phi(Instant::now())
-    }
-}
 
 pub struct PhiFD {
     state: Rc<RefCell<FDState>>,
@@ -133,58 +53,6 @@ enum FDEvent {
 
 use FDEvent::*;
 
-/// This type is used to identify a member uniquely using its IPv4 number and
-/// port.
-type MemberID = (u32, u16);
-
-/// This stores this process' knowledge about a given member at any given time.
-#[derive(Clone, Debug)]
-struct MemberState {
-
-    /// Information about the member that we need to gossip with other peers.
-    member: Member,
-
-    /// The last time when this member's state was updated.
-    timestamp: Instant,
-
-    window_size: usize,
-
-    /// Book keeping for estimating the distribution of inter-arrival times of
-    /// pings from this node.
-    inter_arrival_window: Option<InterArrivalWindow>,
-}
-
-impl MemberState {
-    fn from_member(member: Member, window_size: usize) -> MemberState {
-        MemberState {
-            member: member,
-            timestamp: Instant::now(),
-            window_size: window_size,
-            inter_arrival_window: None,
-        }
-    }
-
-    fn merge(&mut self, suspicion: f64, heartbeat: u64) {
-        if self.member.get_heartbeat() < heartbeat {
-            self.member.set_heartbeat(heartbeat);
-
-            self.timestamp = Instant::now();
-
-            let wnd_sz = self.window_size;
-            self.inter_arrival_window
-                .get_or_insert_with(|| InterArrivalWindow::of_size(wnd_sz))
-                .tick(Instant::now());
-        }
-    }
-
-    fn phi(&self, at: Instant) -> Option<f64> {
-        self.inter_arrival_window.as_ref().and_then(|iaw| iaw.phi(at))
-    }
-
-    fn get_id(&self) -> MemberID {
-        (self.member.get_ip(), self.member.get_port() as u16)
-    }
-}
 
 struct FDState {
     members: HashMap<MemberID, MemberState>,
@@ -289,7 +157,8 @@ impl PhiFD {
         let now = Instant::now();
         for memberstate in self.state.borrow().members.values() {
             if let Some(susp) = memberstate.phi(now) {
-                info!("phi({:?})={:4}", member_addr(&memberstate.member), susp);
+                let (id, port) = memberstate.get_id();
+                info!("phi({}:{})={:4}", id, port, susp);
             }
         }
     }
@@ -321,7 +190,9 @@ impl PhiFD {
                 state.borrow().members.values(),
                 nmembers
             ).map(|values| {
-                values.iter().map(|v| member_addr(&v.member)).collect::<Vec<_>>()
+                values.iter()
+                    .map(|v| member_addr(v.get_member_ref()))
+                    .collect::<Vec<_>>()
             }).unwrap_or(vec![]);
 
             // And signal for them to be pinged with a Syn ping. Note we just
@@ -331,7 +202,7 @@ impl PhiFD {
             let pings = ping_addrs.into_iter().map(|addr| {
                 let gossip = make_gossip(cur_heartbeat,
                                          state.borrow().members.values().map(|m| {
-                                             m.member.clone()
+                                             m.get_member_ref().clone()
                                          }),
                                          GossipType::Syn);
                 (addr, gossip)
@@ -365,7 +236,7 @@ impl PhiFD {
                     let gossip = make_gossip(
                         cur_heartbeat,
                         state.borrow().members.values().map(|m| {
-                            m.member.clone()
+                            m.get_member_ref().clone()
                         }),
                         GossipType::Ack,
                     );
@@ -446,41 +317,4 @@ impl UdpCodec for GossipCodec {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-
-    #[test]
-    fn test_inter_arrival_interval_window_ctor() {
-        let interval = InterArrivalWindow::of_size(3);
-        assert!(interval.mean().is_none());
-        assert!(interval.variance().is_none());
-        assert_eq!(interval.size, 3);
-    }
-
-    #[test]
-    fn test_inter_arrival_interval_window_update() {
-        let mut interval = InterArrivalWindow::of_size(3);
-        
-        interval.update(Duration::from_secs(3));
-        assert!(interval.mean().is_none());
-        assert!(interval.variance().is_none());
-        assert_eq!(interval.size, 3);
-
-        interval.update(Duration::from_secs(4));
-        assert_almost_eq!(interval.mean().unwrap(), 3.5f64, 1e-6);
-        assert_almost_eq!(interval.variance().unwrap(), 0.5f64, 1e-6);
-        assert_eq!(interval.size, 3);
-
-        interval.update(Duration::from_secs(100));
-        assert_almost_eq!(interval.mean().unwrap(), 35.6666666f64, 10e-6);
-        assert_almost_eq!(interval.variance().unwrap(), 3104.33333f64, 10e-6);
-        assert_eq!(interval.size, 3);
-    }
-}
 
