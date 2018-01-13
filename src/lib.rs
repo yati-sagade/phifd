@@ -6,7 +6,6 @@ extern crate log;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
-#[macro_use]
 extern crate statrs;
 
 extern crate protobuf;
@@ -17,7 +16,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::io;
 use std::net::SocketAddr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH, Instant};
+use std::time::{Instant};
 use std::collections::HashMap;
 use std::cmp;
 
@@ -188,7 +187,7 @@ impl PhiFD {
             let ping_addrs = seq::sample_iter(
                 &mut rng,
                 state.borrow().members.values(),
-                nmembers
+                k
             ).map(|values| {
                 values.iter()
                     .map(|v| member_addr(v.get_member_ref()))

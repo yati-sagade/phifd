@@ -8,11 +8,6 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
 
-use futures::stream::Stream;
-use futures::Future;
-use tokio_core::reactor::Core;
-use tokio_core::net::TcpListener;
-
 use std::net::SocketAddr;
 use std::env;
 use std::time::Duration;

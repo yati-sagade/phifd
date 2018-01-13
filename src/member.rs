@@ -167,13 +167,13 @@ mod tests {
         assert_eq!(interval.size(), 3);
 
         interval.update(Duration::from_secs(4));
-        assert_almost_eq!(interval.mean().unwrap(), 3.5f64, 1e-6);
-        assert_almost_eq!(interval.variance().unwrap(), 0.5f64, 1e-6);
+        assert!((interval.mean().unwrap() - 3.5f64).abs() <= 1e-6);
+        assert!((interval.variance().unwrap() - 0.5f64).abs() <= 1e-6);
         assert_eq!(interval.size(), 3);
 
         interval.update(Duration::from_secs(100));
-        assert_almost_eq!(interval.mean().unwrap(), 35.6666666f64, 10e-6);
-        assert_almost_eq!(interval.variance().unwrap(), 3104.33333f64, 10e-6);
+        assert!((interval.mean().unwrap() - 35.6666666f64).abs() <= 10e-6);
+        assert!((interval.variance().unwrap() - 3104.33333f64).abs() <= 10e-6);
         assert_eq!(interval.size(), 3);
     }
 }
