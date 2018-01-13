@@ -31,7 +31,9 @@ use statrs::statistics::{Mean, Variance, Statistics};
 
 pub mod proto;
 pub mod util;
+pub mod config;
 
+pub use config::*;
 pub use util::*;
 
 fn unix_timestamp() -> u64 {
@@ -142,8 +144,8 @@ struct MemberState {
     /// Information about the member that we need to gossip with other peers.
     member: Member,
 
-    /// The last UNIX time when this member's state was updated.
-    timestamp: u64,
+    /// The last time when this member's state was updated.
+    timestamp: Instant,
 
     window_size: usize,
 
@@ -156,7 +158,7 @@ impl MemberState {
     fn from_member(member: Member, window_size: usize) -> MemberState {
         MemberState {
             member: member,
-            timestamp: unix_timestamp(),
+            timestamp: Instant::now(),
             window_size: window_size,
             inter_arrival_window: None,
         }
@@ -166,7 +168,7 @@ impl MemberState {
         if self.member.get_heartbeat() < heartbeat {
             self.member.set_heartbeat(heartbeat);
 
-            self.timestamp = unix_timestamp();
+            self.timestamp = Instant::now();
 
             let wnd_sz = self.window_size;
             self.inter_arrival_window
@@ -273,38 +275,6 @@ impl FDState {
     }
 }
 
-pub struct Config {
-    ping_interval: Duration, // seconds
-    num_members_to_ping: u8,
-    window_size: usize,
-    addr: SocketAddr,
-}
-
-impl Config {
-    pub fn default() -> Config {
-        Config {
-            ping_interval: Duration::from_millis(1000),
-            num_members_to_ping: 3,
-            addr: "0.0.0.0:12345".parse::<SocketAddr>().unwrap(),
-            window_size: 11usize,
-        }
-    }
-
-    pub fn set_ping_interval(&mut self, interval: Duration) -> &mut Config {
-        self.ping_interval = interval;
-        self
-    }
-
-    pub fn set_num_members_to_ping(&mut self, n: u8) -> &mut Config {
-        self.num_members_to_ping = n;
-        self
-    }
-
-    pub fn set_addr(&mut self, addr: SocketAddr) -> &mut Config {
-        self.addr = addr;
-        self
-    }
-}
 
 impl PhiFD {
     pub fn new(config: Option<Config>) -> PhiFD {
