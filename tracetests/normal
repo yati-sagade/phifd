@@ -4,5 +4,5 @@ spawn_with_log two RUST_BACKTRACE=1 ../target/debug/phifd -t 2 -i 127.0.0.1:1234
 spawn_with_log three RUST_BACKTRACE=1 ../target/debug/phifd -t 1 -i 127.0.0.1:12345 -a 127.0.0.1:12347
 spawn_with_log four RUST_BACKTRACE=1 ../target/debug/phifd -t 4 -i 127.0.0.1:12345 -a 127.0.0.1:12348
 spawn_with_log five RUST_BACKTRACE=1 ../target/debug/phifd -t 3 -i 127.0.0.1:12345 -a 127.0.0.1:12349
-sleep 60
+sleep 5
 check perl check_normal_ops.pl

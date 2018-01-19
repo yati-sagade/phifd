@@ -1,9 +1,10 @@
+use v5.22;
 use strict;
 use warnings;
 use feature qw(say);
 use Getopt::Long;
-
-
+use File::Spec;
+use File::Path qw(make_path remove_tree);
 
 my %opts;
 GetOptions(\%opts,
@@ -31,7 +32,7 @@ if ( $file ) {
 }
 
 my $test_name;
-
+my $logdir;
 eval {
     while (<$read_handle>) {
         chomp;
@@ -44,20 +45,27 @@ eval {
             die "first command should be the 'name' command"
                 if $cmd ne 'name';
             $test_name = join ' ', @args;
+            $logdir = File::Spec->catfile( 'logs', $test_name );
+            remove_tree( $logdir );
+            make_path( $logdir );
             next;
         }
 
 
         if ( $cmd eq 'halt' ) {
             stop( keys %spawned_children );
-            next;
+            last;
         }
 
         if ( $cmd eq 'check' ) {
-            stop( keys %spawned_children );
+            my @children = keys %spawned_children;
+            stop( @children );
             my ( $checker, @script_args ) = @args;
-            system $checker, @script_args;
-            next;
+            _info( "Going to call checker script $checker now." );
+            system $checker,
+                    @script_args,
+                    map File::Spec->catfile($logdir, $_.'.log'), @children;
+            last;
         }
 
         die "Invalid command $cmd" unless exists $cmds{$cmd};
@@ -115,11 +123,7 @@ sub spawn {
 
 sub spawn_with_log {
     my ( $name, @cmdline ) = @_;
-    my $logfile = sprintf '%s-%s.log', $test_name, $name;
-
-    unlink $logfile or die "cannot remove $logfile: $!"
-        if -e $logfile;
-
+    my $logfile = File::Spec->catfile( $logdir, $name.'.log' );
     push @cmdline, '2>&1', '|', 'tee', $logfile;
     spawn( $name, @cmdline );
 }
@@ -129,9 +133,3 @@ sub _info {
     my $msg = shift;
     say '[runner] '.$msg;
 }
-
-# spawn name cmdline
-# stop name
-# sleep secs
-# halt
-
