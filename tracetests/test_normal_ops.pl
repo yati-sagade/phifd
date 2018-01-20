@@ -2,7 +2,6 @@ package Local::PhiFD::TestNormalOps;
 
 use strict;
 use warnings;
-use feature qw(say);
 use Getopt::Long;
 use List::MoreUtils qw(all);
 use Scalar::Util qw(looks_like_number);
@@ -75,8 +74,6 @@ sub main {
         ],
     );
 
-    my @harnesses;
-    my @handles;
     for my $procnum ( 0 .. $#cmds ) {
         my $logfile = File::Spec->catfile( $self->test_log_dir,
             'proc_' . $procnum . '.log' );
@@ -89,13 +86,25 @@ sub main {
             $ENV{RUST_BACKTRACE} = 1;
         };
 
-        push @handles,   $fh;
-        push @harnesses, $harness;
+        push @{ $self->{handles} },   $fh;
+        push @{ $self->{harnesses} }, $harness;
     }
 
-    my $start = time;
-    while ( time - $start < $self->{test_runtime} ) {
-        $_->pump_nb for @harnesses;
+    $self->log( "started %d children", scalar( @{ $self->{harnesses} } ) );
+    $self->log( "now waiting for %ds", $self->{test_runtime} );
+
+    my $start   = time;
+    my $elapsed = 0;
+    my $logged;
+    while ( $elapsed < $self->{test_runtime} ) {
+        $elapsed = time - $start;
+        $_->pump_nb for @{ $self->{harnesses} };
+        if ( !defined $logged || ( $elapsed % 10 == 0 && $logged != $elapsed ) )
+        {
+            $logged = $elapsed;
+            $self->log( '%ds to go', $self->{test_runtime} - $elapsed )
+              if int($elapsed) % 10 == 0;
+        }
     }
 
     $self->cleanup();
@@ -103,6 +112,7 @@ sub main {
 
 sub cleanup {
     my ($self) = @_;
+    $self->log( 'cleaning up %d children', scalar( @{ $self->{harnesses} } ) );
     $_->kill_kill for @{ $self->{harnesses} };
     close for @{ $self->{handles} };
 }
@@ -116,6 +126,12 @@ sub setup_logging {
 sub test_log_dir {
     my ($self) = @_;
     return File::Spec->catfile( $self->{log_root}, $self->{test_name} );
+}
+
+sub log {
+    my ( $self, $fmt, @rest ) = @_;
+    $fmt .= "\n" unless $fmt =~ /\n$/;
+    printf "[runner] " . $fmt, @rest;
 }
 
 1;
