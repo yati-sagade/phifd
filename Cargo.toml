@@ -4,22 +4,22 @@ version = "0.1.0"
 authors = ["Yati Sagade <mail@ysagade.nl>"]
 
 [build-dependencies]
-protoc-rust="1.4"
+protoc-rust="^1.4"
 
 [dependencies]
-time = "0.1"
-bytes = "0.4"
-futures="0.1"
-statrs="0.9.0"
-protobuf= { version="1.4", features=["with-bytes"] }
+time = "^0.1"
+bytes = "^0.4"
+futures="^0.1"
+statrs="^0.9.0"
+protobuf= { version="^1.4", features=["with-bytes"] }
 
-tokio-io="0.1"
-tokio-core="0.1"
-tokio-proto = "0.1"
-tokio-service = "0.1"
+tokio-io="^0.1"
+tokio-core="^0.1"
+tokio-proto = "^0.1"
+tokio-service = "^0.1"
 
-simple_logger="0.4"
-log="0.3.1"
-getopts="0.2"
+simple_logger="^0.4"
+log="^0.3.1"
+getopts="^0.2"
 
-rand="0.4"
+rand="^0.4"
