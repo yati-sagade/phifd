@@ -3,7 +3,6 @@ use std::time::{Instant, Duration};
 
 use proto::msg::Member;
 use statrs::distribution::{Normal, Univariate};
-#[cfg(test)]
 use statrs::statistics::{Mean, Variance};
 use statrs::statistics::{Statistics};
 
@@ -17,6 +16,7 @@ pub struct InterArrivalWindow {
     window: VecDeque<Duration>,
     last_arrival_at: Option<Instant>,
     size: usize,
+    running_stats: Option<(f64, f64)>, // Running (mean, variance)
 }
 
 impl InterArrivalWindow {
@@ -28,12 +28,25 @@ impl InterArrivalWindow {
             window: VecDeque::with_capacity(size),
             size: size,
             last_arrival_at: None,
+            running_stats: None,
         }
     }
 
     pub fn size(&self) -> usize { self.size }
 
+    /// Update estimates of the mean and variance of inter-arrival times by
+    /// adding an observation `value` to the window.
     pub fn update(&mut self, value: Duration) {
+
+        let duration_secs = value.as_secs() as f64
+                          + value.subsec_nanos() as f64 * 1e-9;
+        self.running_stats = self.running_stats.map(|(old_mean, old_var)| {
+            let new_mean = 0.9 * old_mean + 0.1 * duration_secs;
+            let new_var = 0.9 * old_var +
+                0.1 * (duration_secs - old_mean) * (duration_secs - new_mean);
+            (new_mean, new_var)
+        }).or(Some((duration_secs, 0f64)));
+
         if self.window.len() == self.size {
             self.window.pop_front().expect("zero window size encountered");
         }
@@ -46,11 +59,19 @@ impl InterArrivalWindow {
 
             let mu = Statistics::mean(&raw_secs);
             let sigma = Statistics::variance(&raw_secs).sqrt();
-            self.distribution = Some(Normal::new(mu, sigma)
-                                     .expect("failed to create a normal distribution object!"));
+            let dist = Normal::new(mu, sigma)
+                    .expect("failed to create a normal distribution object!");
+            let (m, v) = self.running_stats.unwrap();
+            println!("after update, regular mean: {}, running: {}, regular var: {}, running: {}",
+                     Mean::mean(&dist), m, Variance::variance(&dist), v);
+            self.distribution = Some(dist);
         }
+
     }   
 
+    /// Trigger an update of the mean and variance estimates of the
+    /// inter-arrival times as though a message arrived at the instant given
+    /// by `arrival_time`.
     pub fn tick(&mut self, arrival_time: Instant) {
         if let Some(last_arrival) = self.last_arrival_at {
             self.update(arrival_time.duration_since(last_arrival));

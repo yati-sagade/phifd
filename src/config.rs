@@ -14,7 +14,7 @@ impl Config {
             ping_interval: Duration::from_millis(1000),
             num_members_to_ping: 3,
             addr: "0.0.0.0:12345".parse::<SocketAddr>().unwrap(),
-            window_size: 11usize,
+            window_size: 10usize,
         }
     }
 
