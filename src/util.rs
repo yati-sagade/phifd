@@ -1,5 +1,6 @@
 use proto::msg::{Member, Gossip};
-use std::net::{SocketAddr, AddrParseError, IpAddr, Ipv4Addr};
+use std::net::{SocketAddr, AddrParseError, IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::io;
 
 #[derive(Clone, Debug)]
 pub enum GossipType {
@@ -77,4 +78,13 @@ pub fn member_addr(member: &Member) -> SocketAddr {
     SocketAddr::new(ipaddr, port)
 }
 
+
+
+
+pub fn resolve_first_ipv4(host: &str) -> io::Result<Option<SocketAddr>> {
+    Ok(host.to_socket_addrs()? // Err return happens here
+        .filter(SocketAddr::is_ipv4)
+        .take(1)
+        .next())
+}
 
