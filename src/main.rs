@@ -8,14 +8,21 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
 
-use std::net::SocketAddr;
+use std::process;
 use std::env;
 use std::time::Duration;
 use phifd::{PhiFD, Config};
-use phifd::util::member_from_address;
+use phifd::util;
 use getopts::Options;
 use log::LogLevel;
 use phifd::proto::msg::Member;
+
+fn main() {
+    process::exit(match run() {
+        Ok(_) => 0,
+        Err(_) => 1
+    });
+}
 
 
 fn print_usage(program: &str, opts: Options) {
@@ -23,7 +30,7 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn main() {
+fn run() -> Result<(), ()> {
     simple_logger::init_with_level(LogLevel::Info).unwrap();
     let args: Vec<String> = env::args().collect();
     let prog = args[0].clone();
@@ -56,7 +63,7 @@ fn main() {
 
     if matches.opt_present("h") {
         print_usage(&prog, opts);
-        return;
+        return Ok(());
     }
 
     let introducers = matches.opt_strs("i");
@@ -69,6 +76,22 @@ fn main() {
         );
     }
 
+    let introducer_ips = introducers
+                        .iter()
+                        .map(|addr| util::resolve_first_ipv4(addr))
+                        .filter_map(|addr_result| match addr_result {
+                            Ok(some_or_none) => some_or_none,
+                            Err(_) => None,
+                        })
+                        .collect::<Vec<_>>();
+
+    if introducers.len() > 0 && introducer_ips.len() == 0 {
+        warn!("Cannot resolve even one introducer. Quitting.");
+        return Err(());
+    }
+
+    println!("Intoducer ips: {:?}", &introducer_ips);
+
 
     let mut cfg = Config::default();
     cfg.set_ping_interval(Duration::from_millis(
@@ -78,23 +101,26 @@ fn main() {
             .unwrap_or(1) * 1000,
     ));
 
-    let addr = matches
-        .opt_str("addr")
-        .unwrap_or("0.0.0.0:12345".to_string())
-        .parse::<SocketAddr>()
-        .expect("invalid listen address");
+    let addrstr = matches
+            .opt_str("addr")
+            .unwrap_or("0.0.0.0:12345".to_string());
 
-    cfg.set_addr(addr);
+    let sockaddr = util::resolve_first_ipv4(&addrstr)
+                .expect("Error resolving listen address")
+                .expect("No resolution for given listen address");
 
-    info!("starting failure detector now on {}", &addr);
+    cfg.set_addr(sockaddr);
+
+    info!("starting failure detector now on {}", &sockaddr);
     let mut fd = if introducers.len() != 0 {
-        let members = introducers
+        let members = introducer_ips
             .into_iter()
-            .map(|intro| member_from_address(&intro).unwrap())
+            .map(|intro| util::member_from_sockaddr(intro).unwrap())
             .collect::<Vec<Member>>();
         PhiFD::with_members(members, Some(cfg))
     } else {
         PhiFD::new(Some(cfg))
     };
     fd.run();
+    Ok(())
 }
