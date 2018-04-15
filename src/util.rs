@@ -56,8 +56,10 @@ pub fn member_from_sockaddr(addr: SocketAddr) -> Result<Member, AddrParseError> 
     Ok(member)
 }
 
-pub fn make_gossip<I>(heartbeat: u64, members: I, typ: GossipType) -> Gossip 
-        where I: Iterator<Item=Member> {
+pub fn make_gossip<I>(heartbeat: u64, members: I, typ: GossipType) -> Gossip
+where
+    I: Iterator<Item = Member>,
+{
     let mut gossip = Gossip::new();
     gossip.set_kind(typ.into());
     gossip.set_heartbeat(heartbeat);
@@ -82,9 +84,10 @@ pub fn member_addr(member: &Member) -> SocketAddr {
 
 
 pub fn resolve_first_ipv4(host: &str) -> io::Result<Option<SocketAddr>> {
-    Ok(host.to_socket_addrs()? // Err return happens here
+    Ok(
+        host.to_socket_addrs()? // Err return happens here
         .filter(SocketAddr::is_ipv4)
         .take(1)
-        .next())
+        .next(),
+    )
 }
-

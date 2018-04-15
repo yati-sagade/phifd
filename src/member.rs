@@ -4,35 +4,93 @@ use std::time::{Instant, Duration};
 use proto::msg::Member;
 use statrs::distribution::{Normal, Univariate};
 use statrs::statistics::{Mean, Variance};
-use statrs::statistics::{Statistics};
+use statrs::statistics::Statistics;
+use std::f64::consts::PI;
 
 /// This type is used to identify a member uniquely using its IPv4 number and
 /// port.
 pub type MemberID = (u32, u16);
 
+
+/// A normal distribution maintained using weighted averages.
+#[derive(Clone, Debug)]
+pub struct InterArrivalDistribution {
+    mu: f64,
+    sigma: f64,
+    var: f64,
+    alpha: f64,
+
+    std_normal_variate: Normal,
+}
+
+impl InterArrivalDistribution {
+    pub fn new(mu: f64, sigma: f64, alpha: f64) -> InterArrivalDistribution {
+        InterArrivalDistribution {
+            mu: mu,
+            sigma: sigma,
+            var: sigma * sigma,
+            alpha: alpha,
+            std_normal_variate: Normal::new(0f64, 1f64).unwrap(),
+        }
+    }
+
+    pub fn mean(&self) -> f64 {
+        self.mu
+    }
+
+    pub fn stddev(&self) -> f64 {
+        self.sigma
+    }
+
+    pub fn variance(&self) -> f64 {
+        self.var
+    }
+
+    pub fn update(&mut self, val: f64) {
+
+        let new_mean = self.alpha * self.mean() + (1f64 - self.alpha) * val;
+
+        let new_var = self.alpha * self.variance() +
+            (1f64 - self.alpha) * (val - self.mean()) * (val - new_mean);
+
+        println!("Update with {:0.4}, mean: {:0.4} -> {:0.4}, var: {:0.4}  -> {:0.4}",
+                    val, self.mean(), new_mean, self.variance(), new_var);
+        self.mu = new_mean;
+        self.var = new_var;
+        self.sigma = new_var.sqrt();
+    }
+
+    pub fn cdf(&self, val: f64) -> Option<f64> {
+        if self.sigma == 0f64 {
+            None
+        } else {
+            let z = (val - self.mean()) / self.stddev();
+            let cdf = self.std_normal_variate.cdf(z);
+            Some(cdf)
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InterArrivalWindow {
-    distribution: Option<Normal>,
-    window: VecDeque<Duration>,
+    distribution: Option<InterArrivalDistribution>,
     last_arrival_at: Option<Instant>,
     size: usize,
-    running_stats: Option<(f64, f64)>, // Running (mean, variance)
 }
 
 impl InterArrivalWindow {
-
     pub fn of_size(size: usize) -> InterArrivalWindow {
         assert!(size >= 3);
         InterArrivalWindow {
             distribution: None,
-            window: VecDeque::with_capacity(size),
             size: size,
             last_arrival_at: None,
-            running_stats: None,
         }
     }
 
-    pub fn size(&self) -> usize { self.size }
+    pub fn size(&self) -> usize {
+        self.size
+    }
 
     /// Update estimates of the mean and variance of inter-arrival times by
     /// adding an observation `value` to the window.
@@ -40,34 +98,23 @@ impl InterArrivalWindow {
 
         let duration_secs = value.as_secs() as f64
                           + value.subsec_nanos() as f64 * 1e-9;
-        self.running_stats = self.running_stats.map(|(old_mean, old_var)| {
-            let new_mean = 0.9 * old_mean + 0.1 * duration_secs;
-            let new_var = 0.9 * old_var +
-                0.1 * (duration_secs - old_mean) * (duration_secs - new_mean);
-            (new_mean, new_var)
-        }).or(Some((duration_secs, 0f64)));
 
-        if self.window.len() == self.size {
-            self.window.pop_front().expect("zero window size encountered");
+        if let Some(ref mut interdist) = self.distribution {
+            interdist.update(duration_secs);
+        } else {
+            self.distribution = Some(
+                InterArrivalDistribution::new(duration_secs, 0f64, 0.9f64)
+            );
         }
-        self.window.push_back(value);
-        if self.window.len() >= 2 {
+        //let (m, v) = self.running_stats.unwrap();
+        let (m, v) = self.distribution
+                .as_ref()
+                .map(|d| (d.mean(), d.variance()))
+                .expect("distribution should have been constructed by now");
 
-            let raw_secs = self.window.iter().map(|dur| {
-                dur.as_secs() as f64 + dur.subsec_nanos() as f64 * 1e-9
-            }).collect::<Vec<f64>>();
+            println!("after update, mean: {}, var: {}", m, v);
 
-            let mu = Statistics::mean(&raw_secs);
-            let sigma = Statistics::variance(&raw_secs).sqrt();
-            let dist = Normal::new(mu, sigma)
-                    .expect("failed to create a normal distribution object!");
-            let (m, v) = self.running_stats.unwrap();
-            println!("after update, regular mean: {}, running: {}, regular var: {}, running: {}",
-                     Mean::mean(&dist), m, Variance::variance(&dist), v);
-            self.distribution = Some(dist);
-        }
-
-    }   
+    }
 
     /// Trigger an update of the mean and variance estimates of the
     /// inter-arrival times as though a message arrived at the instant given
@@ -84,11 +131,10 @@ impl InterArrivalWindow {
             if last_arrival > at {
                 None
             } else {
-                self.distribution.map(|dist| {
+                self.distribution.as_ref().and_then(|dist| {
                     let dur = at.duration_since(last_arrival);
-                    let dur_secs = dur.as_secs() as f64 +
-                        dur.subsec_nanos() as f64 * 1e-9;
-                    -(1.0 - dist.cdf(dur_secs)).log10()
+                    let dur_secs = dur.as_secs() as f64 + dur.subsec_nanos() as f64 * 1e-9;
+                    dist.cdf(dur_secs).map(|cdf| -(1.0 - cdf).log10())
                 })
             }
         } else {
@@ -110,7 +156,6 @@ impl InterArrivalWindow {
 /// This stores this process' knowledge about a given member at any given time.
 #[derive(Clone, Debug)]
 pub struct MemberState {
-
     /// Information about the member that we need to gossip with other peers.
     member: Member,
 
@@ -148,7 +193,9 @@ impl MemberState {
     }
 
     pub fn phi(&self, at: Instant) -> Option<f64> {
-        self.inter_arrival_window.as_ref().and_then(|iaw| iaw.phi(at))
+        self.inter_arrival_window.as_ref().and_then(
+            |iaw| iaw.phi(at),
+        )
     }
 
     pub fn get_id(&self) -> MemberID {
@@ -181,7 +228,7 @@ mod tests {
     #[test]
     fn test_inter_arrival_interval_window_update() {
         let mut interval = InterArrivalWindow::of_size(3);
-        
+
         interval.update(Duration::from_secs(3));
         assert!(interval.mean().is_none());
         assert!(interval.variance().is_none());

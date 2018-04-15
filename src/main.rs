@@ -20,7 +20,7 @@ use phifd::proto::msg::Member;
 fn main() {
     process::exit(match run() {
         Ok(_) => 0,
-        Err(_) => 1
+        Err(_) => 1,
     });
 }
 
@@ -53,6 +53,12 @@ fn run() -> Result<(), ()> {
             "ping_interval",
             "how often, in integral seconds, to ping peers",
             "INTERVAL",
+        )
+        .optopt(
+            "d",
+            "ticker_delay_secs",
+            "Upper limit of a random delay to apply to periodic ping-outs",
+            "DELAY"
         );
 
 
@@ -77,13 +83,13 @@ fn run() -> Result<(), ()> {
     }
 
     let introducer_ips = introducers
-                        .iter()
-                        .map(|addr| util::resolve_first_ipv4(addr))
-                        .filter_map(|addr_result| match addr_result {
-                            Ok(some_or_none) => some_or_none,
-                            Err(_) => None,
-                        })
-                        .collect::<Vec<_>>();
+        .iter()
+        .map(|addr| util::resolve_first_ipv4(addr))
+        .filter_map(|addr_result| match addr_result {
+            Ok(some_or_none) => some_or_none,
+            Err(_) => None,
+        })
+        .collect::<Vec<_>>();
 
     if introducers.len() > 0 && introducer_ips.len() == 0 {
         warn!("Cannot resolve even one introducer. Quitting.");
@@ -101,13 +107,19 @@ fn run() -> Result<(), ()> {
             .unwrap_or(1) * 1000,
     ));
 
-    let addrstr = matches
-            .opt_str("addr")
-            .unwrap_or("0.0.0.0:12345".to_string());
+    matches.opt_str("ticker_delay_secs")
+           .map(|s| {
+               let secs = s.parse::<u8>().expect("invalid # of secs");
+               cfg.set_ticker_delay(secs);
+           });
+
+    let addrstr = matches.opt_str("addr").unwrap_or(
+        "0.0.0.0:12345".to_string(),
+    );
 
     let sockaddr = util::resolve_first_ipv4(&addrstr)
-                .expect("Error resolving listen address")
-                .expect("No resolution for given listen address");
+        .expect("Error resolving listen address")
+        .expect("No resolution for given listen address");
 
     cfg.set_addr(sockaddr);
 

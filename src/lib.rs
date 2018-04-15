@@ -16,11 +16,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::io;
 use std::net::SocketAddr;
-use std::time::{Instant};
+use std::time::Instant;
 use std::collections::HashMap;
 use std::cmp;
 
-use rand::{thread_rng, seq};
+use rand::{thread_rng, seq, Rng};
 use futures::{Stream, stream};
 use tokio_core::net::{UdpSocket, UdpCodec};
 use tokio_core::reactor::{Core, Interval};
@@ -83,7 +83,10 @@ impl FDState {
         for member in members.into_iter() {
             let ip = member.get_ip();
             let port = member.get_port() as u16;
-            ret.members.insert((ip, port), MemberState::from_member(member, wnd_sz));
+            ret.members.insert(
+                (ip, port),
+                MemberState::from_member(member, wnd_sz),
+            );
         }
         ret
     }
@@ -97,13 +100,13 @@ impl FDState {
          * we merge for both these cases anyway, because the .or_insert() API
          * is convenient. */
 
-        let mut sender = member_from_sockaddr(from_addr)
-                         .expect("error recovering who pinged us");
+        let mut sender = member_from_sockaddr(from_addr).expect("error recovering who pinged us");
         sender.set_heartbeat(gossip.get_heartbeat());
 
         // FIXME: don't do this over and over
-        let our_addr = ip_number_and_port_from_sockaddr(self.config.addr)
-            .expect("could not parse our own ip/port?");
+        let our_addr = ip_number_and_port_from_sockaddr(self.config.addr).expect(
+            "could not parse our own ip/port?",
+        );
 
 
         // handle the sender
@@ -115,13 +118,16 @@ impl FDState {
             let heartbeat = sender.get_heartbeat();
             let susp = sender.get_suspicion();
             let wnd_sz = self.config.window_size;
-            self.members.entry(snd_addr)
-                .or_insert_with(move || MemberState::from_member(
-                        sender, wnd_sz))
+            self.members
+                .entry(snd_addr)
+                .or_insert_with(move || MemberState::from_member(sender, wnd_sz))
                 .merge(susp, heartbeat);
         } else {
-            warn!("We sent a ping to ourselves (us: {:?}, from: {:?})",
-                    &our_addr, &snd_addr);
+            warn!(
+                "We sent a ping to ourselves (us: {:?}, from: {:?})",
+                &our_addr,
+                &snd_addr
+            );
         }
 
         for incoming_member in gossip.take_members().into_iter() {
@@ -133,9 +139,9 @@ impl FDState {
                 let susp = incoming_member.get_suspicion();
                 let heartbeat = incoming_member.get_heartbeat();
                 let wnd_sz = self.config.window_size;
-                self.members.entry(addr)
-                    .or_insert_with(move || MemberState::from_member(
-                            incoming_member, wnd_sz))
+                self.members
+                    .entry(addr)
+                    .or_insert_with(move || MemberState::from_member(incoming_member, wnd_sz))
                     .merge(susp, heartbeat);
             }
         }
@@ -174,8 +180,9 @@ impl PhiFD {
         let conn = UdpSocket::bind(&listen_addr, &handle).unwrap();
         let (sink, stream) = conn.framed(GossipCodec).split();
 
-        let num_members_to_ping =
-            state.borrow().config.num_members_to_ping as usize;
+        let slowness_level = self.state.borrow().config.ticker_delay;
+
+        let num_members_to_ping = state.borrow().config.num_members_to_ping as usize;
 
         let pinger = ticker.and_then(|_| {
 
@@ -184,28 +191,32 @@ impl PhiFD {
             let nmembers = state.borrow().members.len();
             let k = cmp::min(num_members_to_ping, nmembers);
 
-            let ping_addrs = seq::sample_iter(
-                &mut rng,
-                state.borrow().members.values(),
-                k
-            ).map(|values| {
-                values.iter()
-                    .map(|v| member_addr(v.get_member_ref()))
-                    .collect::<Vec<_>>()
-            }).unwrap_or(vec![]);
+            let ping_addrs = seq::sample_iter(&mut rng, state.borrow().members.values(), k)
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|v| member_addr(v.get_member_ref()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or(vec![]);
 
             // And signal for them to be pinged with a Syn ping. Note we just
             // return the (peer_addr, gossip) pairs letting the downstream
             // take care of actually sending the pings.
             let cur_heartbeat = state.borrow().cur_heartbeat();
-            let pings = ping_addrs.into_iter().map(|addr| {
-                let gossip = make_gossip(cur_heartbeat,
-                                         state.borrow().members.values().map(|m| {
-                                             m.get_member_ref().clone()
-                                         }),
-                                         GossipType::Syn);
-                (addr, gossip)
-            }).collect::<Vec<_>>();
+            let pings = ping_addrs
+                .into_iter()
+                .map(|addr| {
+                    let gossip = make_gossip(
+                        cur_heartbeat,
+                        state.borrow().members.values().map(|m| {
+                            m.get_member_ref().clone()
+                        }),
+                        GossipType::Syn,
+                    );
+                    (addr, gossip)
+                })
+                .collect::<Vec<_>>();
 
             // Update heartbeat
             state.borrow_mut().epoch();
@@ -228,7 +239,7 @@ impl PhiFD {
             // Note that we don't actually send the ping here, but just
             // return a future (that resolves immediately, since Result<T,U>
             // is a type for which the Future trait is implemented.
- 
+
             let cur_heartbeat = state.borrow().cur_heartbeat();
             match GossipType::from_u32(gossip.get_kind()) {
                 Some(GossipType::Syn) => {
@@ -240,10 +251,11 @@ impl PhiFD {
                         GossipType::Ack,
                     );
                     Ok(AckOut(addr_from, gossip))
-                },
+                }
                 Some(GossipType::Ack) => Ok(StateUpdated),
-                None => Ok(Unexpected("Expected a gossip type, but got none!"
-                                      .to_string()))
+                None => Ok(Unexpected(
+                    "Expected a gossip type, but got none!".to_string(),
+                )),
             }
         });
 
@@ -315,5 +327,3 @@ impl UdpCodec for GossipCodec {
         addr
     }
 }
-
-

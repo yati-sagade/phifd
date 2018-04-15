@@ -6,6 +6,7 @@ pub struct Config {
     pub num_members_to_ping: u8,
     pub window_size: usize,
     pub addr: SocketAddr,
+    pub ticker_delay: Option<u8>,
 }
 
 impl Config {
@@ -15,6 +16,7 @@ impl Config {
             num_members_to_ping: 3,
             addr: "0.0.0.0:12345".parse::<SocketAddr>().unwrap(),
             window_size: 10usize,
+            ticker_delay: None,
         }
     }
 
@@ -35,6 +37,11 @@ impl Config {
 
     pub fn set_window_size(&mut self, sz: usize) -> &mut Config {
         self.window_size = sz;
+        self
+    }
+
+    pub fn set_ticker_delay(&mut self, level: u8) -> &mut Config {
+        self.ticker_delay = Some(level);
         self
     }
 }
